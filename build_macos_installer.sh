@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PYTHON_BIN="${PYTHON_BIN:-python3.14}"
+VENV_DIR="${VENV_DIR:-.venv-build}"
+APP_NAME="Wow Parser"
+APP_BUNDLE="dist/${APP_NAME}.app"
+APP_VERSION="${APP_VERSION:-$(tr -d '[:space:]' < VERSION 2>/dev/null || echo 1.0.0)}"
+DMG_NAME="wow-parser-macos-installer-v${APP_VERSION}.dmg"
+
+echo "[1/6] Создание virtualenv: ${VENV_DIR}"
+"${PYTHON_BIN}" -m venv "${VENV_DIR}"
+
+echo "[2/6] Установка зависимостей"
+"${VENV_DIR}/bin/python" -m pip install --upgrade pip
+"${VENV_DIR}/bin/python" -m pip install -r requirements.txt
+"${VENV_DIR}/bin/python" -m playwright install chromium
+
+echo "[3/6] Сборка .app через PyInstaller"
+"${VENV_DIR}/bin/python" -m PyInstaller --noconfirm --windowed --name "${APP_NAME}" app_ui.py
+
+echo "[4/6] Подготовка DMG содержимого"
+rm -rf dist/dmg
+mkdir -p dist/dmg
+cp -R "${APP_BUNDLE}" dist/dmg/
+ln -s /Applications dist/dmg/Applications
+
+echo "[5/6] Сборка DMG"
+hdiutil create -volname "${APP_NAME}" -srcfolder dist/dmg -ov -format UDZO "dist/${DMG_NAME}"
+
+echo "[6/6] Готово"
+echo "Приложение: ${APP_BUNDLE}"
+echo "Установщик: dist/${DMG_NAME}"
+echo "Для Gatekeeper/нотаризации нужен отдельный шаг codesign + notarytool."
