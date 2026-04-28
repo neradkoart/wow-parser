@@ -1,2 +1,5 @@
-2026/04/28-16:23:02.088 1d3498b Creating DB /Users/neradkoartem/wow-parser/tiktok_profile/Default/Local Storage/leveldb since it was missing.
-2026/04/28-16:23:02.097 1d3498b Reusing MANIFEST /Users/neradkoartem/wow-parser/tiktok_profile/Default/Local Storage/leveldb/MANIFEST-000001
+2026/04/28-16:34:31.213 1d382ee Reusing MANIFEST /Users/neradkoartem/wow-parser/tiktok_profile/Default/Local Storage/leveldb/MANIFEST-000001
+2026/04/28-16:34:31.240 1d382ee Recovering log #3
+2026/04/28-16:34:31.241 1d382ee Level-0 table #3: started
+2026/04/28-16:34:31.249 1d382ee Level-0 table #3: 89268 bytes OK
+2026/04/28-16:34:31.258 1d382ee Delete type=0 #3

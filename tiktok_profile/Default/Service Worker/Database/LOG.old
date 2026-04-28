@@ -1,2 +1,3 @@
-2026/04/28-16:23:07.976 1d34935 Creating DB /Users/neradkoartem/wow-parser/tiktok_profile/Default/Service Worker/Database since it was missing.
-2026/04/28-16:23:07.979 1d34935 Reusing MANIFEST /Users/neradkoartem/wow-parser/tiktok_profile/Default/Service Worker/Database/MANIFEST-000001
+2026/04/28-16:34:31.221 1d382f4 Reusing MANIFEST /Users/neradkoartem/wow-parser/tiktok_profile/Default/Service Worker/Database/MANIFEST-000001
+2026/04/28-16:34:31.240 1d382f4 Recovering log #3
+2026/04/28-16:34:31.241 1d382f4 Reusing old log /Users/neradkoartem/wow-parser/tiktok_profile/Default/Service Worker/Database/000003.log 

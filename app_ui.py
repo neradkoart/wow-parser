@@ -4,8 +4,10 @@
 import html
 import io
 import json
+import socket
 import sys
 import threading
+import time
 import traceback
 import webbrowser
 from contextlib import redirect_stderr, redirect_stdout
@@ -18,6 +20,7 @@ import unified_app
 
 HOST = "127.0.0.1"
 PORT = 8765
+IDLE_TIMEOUT_SEC = 120
 
 JOB = {
     "running": False,
@@ -34,6 +37,21 @@ JOB = {
         "dzen": 0,
     },
 }
+LAST_HEARTBEAT_TS = time.monotonic()
+SERVER_REF = {"server": None}
+
+
+def pick_free_port(host, start_port, max_tries=30):
+    for offset in range(max_tries):
+        port = start_port + offset
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind((host, port))
+                return port
+            except OSError:
+                continue
+    raise OSError(f"No free port in range {start_port}-{start_port + max_tries - 1}")
 
 
 FORM_HTML = """<!doctype html>
@@ -42,11 +60,54 @@ FORM_HTML = """<!doctype html>
 <meta charset="utf-8">
 <title>WOW Parser UI</title>
 <style>
-body { font-family: Arial, sans-serif; margin: 20px; background: #f4f7fb; }
-.card { background: #fff; border: 1px solid #dbe3ef; border-radius: 10px; padding: 12px; margin-bottom: 10px; }
-textarea { width: 100%; min-height: 130px; }
-label { font-weight: 600; }
-button { padding: 10px 14px; }
+* { box-sizing: border-box; }
+body {
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  margin: 0;
+  background: linear-gradient(135deg, #f5d0fe 0%, #fdf2f8 35%, #ecfccb 100%);
+  color: #111827;
+}
+.container { max-width: 1180px; margin: 0 auto; padding: 20px; }
+.hero {
+  background: rgba(255,255,255,0.82);
+  border: 1px solid #f1d5fe;
+  border-radius: 20px;
+  padding: 22px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 16px 35px rgba(17,24,39,.08);
+  margin-bottom: 16px;
+}
+.hero h1 { margin: 0 0 8px 0; font-size: 30px; line-height: 1.1; }
+.hero p { margin: 0; color: #374151; }
+form { margin-top: 12px; }
+.card {
+  background: #ffffff;
+  border: 1px solid #e9d5ff;
+  border-radius: 14px;
+  padding: 14px;
+  margin-bottom: 10px;
+  box-shadow: 0 6px 18px rgba(17,24,39,.06);
+}
+textarea {
+  width: 100%;
+  min-height: 130px;
+  border: 1px solid #ddd6fe;
+  border-radius: 10px;
+  padding: 10px;
+  background: #fff;
+  font-family: inherit;
+}
+label { font-weight: 600; color: #1f2937; }
+button {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid #d8b4fe;
+  background: #ffffff;
+  color: #581c87;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:hover { background: #faf5ff; }
 .log { white-space: pre-wrap; background:#111827; color:#e5e7eb; padding:12px; border-radius:8px; }
 .wait { display:none; padding:10px; background:#fff7ed; border:1px solid #fed7aa; border-radius:8px; margin-bottom:10px; }
 .bar-wrap { margin: 8px 0; }
@@ -56,7 +117,11 @@ button { padding: 10px 14px; }
 </style>
 </head>
 <body>
-<h1>WOW Parser Unified UI</h1>
+<div class="container">
+<div class="hero">
+  <h1>WOW Parser Unified UI</h1>
+  <p>Внеси входные данные, запусти парсинг и получи структурированные отчеты по всем платформам.</p>
+</div>
 <form method="POST" action="/run">
   <div class="card">
     <label>Источник ссылок:</label><br>
@@ -83,6 +148,7 @@ button { padding: 10px 14px; }
     <label><input type="checkbox" name="skip_dzen"> Пропустить Dzen</label>
   </div>
   <button type="submit">Запустить парсинг</button>
+  <button type="button" id="stopAppBtn" style="margin-left:8px;background:#fee2e2;border:1px solid #fecaca;">Остановить приложение</button>
 </form>
 <div id="waitBox" class="wait">
   <b>Пожалуйста, подождите, идет парсинг...</b>
@@ -98,6 +164,7 @@ button { padding: 10px 14px; }
 const form = document.querySelector('form');
 const waitBox = document.getElementById('waitBox');
 let timer = null;
+let heartbeatTimer = null;
 
 function setBar(id, value) {
   const v = Math.max(0, Math.min(100, Number(value || 0)));
@@ -138,7 +205,27 @@ form.addEventListener('submit', async (e) => {
   }
   pollStatus();
 });
+
+async function sendHeartbeat() {
+  try { await fetch('/heartbeat', { method: 'POST' }); } catch (e) {}
+}
+
+document.getElementById('stopAppBtn').addEventListener('click', async () => {
+  const ok = confirm('Закрыть приложение?');
+  if (!ok) return;
+  try {
+    await fetch('/shutdown', { method: 'POST' });
+  } catch (e) {}
+  document.body.innerHTML = '<h2 style="font-family:Arial,sans-serif">Приложение остановлено. Можно закрыть вкладку.</h2>';
+});
+
+heartbeatTimer = setInterval(sendHeartbeat, 15000);
+sendHeartbeat();
+window.addEventListener('beforeunload', () => {
+  try { navigator.sendBeacon('/heartbeat'); } catch (e) {}
+});
 </script>
+</div>
 </body>
 </html>"""
 
@@ -187,18 +274,31 @@ def run_pipeline(form):
 
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path != "/":
-            self.send_error(404)
-            return
-        body = FORM_HTML.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
     def do_POST(self):
+        global LAST_HEARTBEAT_TS
+
+        if self.path == "/heartbeat":
+            LAST_HEARTBEAT_TS = time.monotonic()
+            body = b"ok"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/shutdown":
+            body = b"stopping"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            server = SERVER_REF.get("server")
+            if server:
+                threading.Thread(target=server.shutdown, daemon=True).start()
+            return
+
         if self.path != "/start":
             self.send_error(404)
             return
@@ -350,8 +450,25 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
-    url = f"http://{HOST}:{PORT}/"
+    selected_port = pick_free_port(HOST, PORT, max_tries=30)
+    server = ThreadingHTTPServer((HOST, selected_port), Handler)
+    SERVER_REF["server"] = server
+
+    def idle_shutdown_watcher():
+        while True:
+            time.sleep(5)
+            if JOB["running"]:
+                continue
+            if time.monotonic() - LAST_HEARTBEAT_TS > IDLE_TIMEOUT_SEC:
+                try:
+                    server.shutdown()
+                except Exception:
+                    pass
+                break
+
+    threading.Thread(target=idle_shutdown_watcher, daemon=True).start()
+
+    url = f"http://{HOST}:{selected_port}/"
     print(f"UI запущен: {url}")
     webbrowser.open(url)
     server.serve_forever()
