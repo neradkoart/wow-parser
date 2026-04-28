@@ -64,9 +64,19 @@ chmod +x build_macos_installer.sh
 Результаты:
 
 - `dist/Wow Parser.app`
-- `dist/wow-parser-macos-installer-v<version>.dmg`
+- `dist/wow-parser-macos-installer-<arch>-v<version>.dmg`
 
 Примечание: для “доверенного” распространения нужен `codesign` + notarization (Apple).
+По умолчанию сборка идет под текущую архитектуру (`native`), чтобы избежать ошибок `not a fat binary`.
+Если нужен явный таргет, можно переопределить: `TARGET_ARCH=arm64` или `TARGET_ARCH=x86_64`.
+`universal2` возможен только если сам Python и все бинарные зависимости тоже `universal2`.
+
+Примеры:
+
+```bash
+TARGET_ARCH=arm64 ./build_macos_installer.sh
+TARGET_ARCH=x86_64 ./build_macos_installer.sh
+```
 
 ## Установщик Windows (.exe installer)
 
@@ -90,6 +100,6 @@ powershell -ExecutionPolicy Bypass -File .\build_windows_installer.ps1
 
 - триггеры: `workflow_dispatch` и теги вида `v*`;
 - собирает:
-  - macOS: `.app` + `.dmg`
+  - macOS: `.app` + `.dmg` отдельно для `arm64` и `x86_64`
   - Windows: `.exe installer`
 - публикует артефакты в Actions.

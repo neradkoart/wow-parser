@@ -12,6 +12,8 @@ from pathlib import Path
 
 import dzen_parser_grouped
 import parse_vk
+import tiktok_parser_grouped
+import youtube_shorts_parser_grouped
 import urls_splitter
 import wow_urls_fetcher
 
@@ -49,6 +51,27 @@ def run_subprocess_task(name, cmd, progress_callback=None, extra_env=None, timeo
         raise RuntimeError(f"{name}: ошибка выполнения ({process.returncode}) | {details}")
     if progress_callback:
         progress_callback(name, 100)
+
+
+def run_inprocess_task(name, module, argv, progress_callback=None, extra_env=None):
+    old_env = {}
+    if extra_env:
+        for key, value in extra_env.items():
+            old_env[key] = os.environ.get(key)
+            os.environ[key] = value
+    try:
+        if progress_callback:
+            progress_callback(name, 10)
+        run_module_main(module, argv)
+        if progress_callback:
+            progress_callback(name, 100)
+    finally:
+        if extra_env:
+            for key, old_value in old_env.items():
+                if old_value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = old_value
 
 
 def read_json(path):
@@ -250,12 +273,17 @@ def run_pipeline(args, progress_callback=None):
     if getattr(sys, "frozen", False) and "python" not in Path(sys.executable).name.lower():
         python_cmd = str(venv_python) if venv_python.exists() else os.environ.get("PYTHON_BIN", "python3.14")
 
+    frozen_mode = bool(getattr(sys, "frozen", False))
+    use_playwright = os.environ.get("TIKTOK_USE_PLAYWRIGHT", "1") == "1" and not frozen_mode
+
     tasks = []
     vk_token = (WORK_DIR / "vk_token.txt").read_text(encoding="utf-8").strip() if (WORK_DIR / "vk_token.txt").exists() else ""
     if not args.skip_vk:
         tasks.append(
             (
                 "vk",
+                parse_vk,
+                ["parse_vk.py"],
                 [
                     python_cmd,
                     "parse_vk.py",
@@ -268,21 +296,34 @@ def run_pipeline(args, progress_callback=None):
         set_progress("vk", 100)
 
     if not args.skip_tiktok:
+        tiktok_module_argv = [
+            "tiktok_parser_grouped.py",
+            "--input",
+            "tiktok.txt",
+            "--output",
+            "tiktok_index.html",
+            "--save-json",
+            "tiktok_result.json",
+        ]
+        tiktok_cmd_argv = [
+            python_cmd,
+            "tiktok_parser_grouped.py",
+            "--input",
+            "tiktok.txt",
+            "--output",
+            "tiktok_index.html",
+            "--save-json",
+            "tiktok_result.json",
+        ]
+        if use_playwright:
+            tiktok_module_argv.extend(["--force-playwright", "--headless"])
+            tiktok_cmd_argv.extend(["--force-playwright", "--headless"])
         tasks.append(
             (
                 "tiktok",
-                [
-                    python_cmd,
-                    "tiktok_parser_grouped.py",
-                    "--input",
-                    "tiktok.txt",
-                    "--output",
-                    "tiktok_index.html",
-                    "--save-json",
-                    "tiktok_result.json",
-                    "--force-playwright",
-                    "--headless",
-                ],
+                tiktok_parser_grouped,
+                tiktok_module_argv,
+                tiktok_cmd_argv,
                 {},
                 1800,
             )
@@ -294,6 +335,16 @@ def run_pipeline(args, progress_callback=None):
         tasks.append(
             (
                 "youtube",
+                youtube_shorts_parser_grouped,
+                [
+                    "youtube_shorts_parser_grouped.py",
+                    "--input",
+                    "shorts.txt",
+                    "--output",
+                    "youtube_index.html",
+                    "--save-json",
+                    "youtube_result.json",
+                ],
                 [
                     python_cmd,
                     "youtube_shorts_parser_grouped.py",
@@ -315,6 +366,16 @@ def run_pipeline(args, progress_callback=None):
         tasks.append(
             (
                 "dzen",
+                dzen_parser_grouped,
+                [
+                    "dzen_parser_grouped.py",
+                    "--input",
+                    "dzen.txt",
+                    "--output",
+                    "dzen_index.html",
+                    "--save-json",
+                    "dzen_result.json",
+                ],
                 [
                     python_cmd,
                     "dzen_parser_grouped.py",
@@ -335,20 +396,31 @@ def run_pipeline(args, progress_callback=None):
     errors = []
     done_count = 0
     total_count = len(tasks) if tasks else 1
-    with ThreadPoolExecutor(max_workers=max(1, len(tasks))) as executor:
-        future_map = {
-            executor.submit(run_subprocess_task, name, cmd, set_progress, env, timeout_sec): name
-            for name, cmd, env, timeout_sec in tasks
-        }
-        for future in as_completed(future_map):
-            name = future_map[future]
+    if frozen_mode:
+        # In packaged .app avoid dependency on external Python binary.
+        for name, module, module_argv, _cmd, env, _timeout_sec in tasks:
             try:
-                future.result()
+                run_inprocess_task(name, module, module_argv, set_progress, env)
             except Exception as exc:
                 errors.append(f"{name}: {exc}")
                 set_progress(name, 100)
             done_count += 1
             set_progress("global", 35 + int((done_count / total_count) * 60))
+    else:
+        with ThreadPoolExecutor(max_workers=max(1, len(tasks))) as executor:
+            future_map = {
+                executor.submit(run_subprocess_task, name, cmd, set_progress, env, timeout_sec): name
+                for name, _module, _module_argv, cmd, env, timeout_sec in tasks
+            }
+            for future in as_completed(future_map):
+                name = future_map[future]
+                try:
+                    future.result()
+                except Exception as exc:
+                    errors.append(f"{name}: {exc}")
+                    set_progress(name, 100)
+                done_count += 1
+                set_progress("global", 35 + int((done_count / total_count) * 60))
 
     if errors:
         raise RuntimeError("Ошибки парсинга: " + "; ".join(errors))

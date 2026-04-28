@@ -9,6 +9,10 @@ on:
 jobs:
   build-macos:
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target_arch: [arm64, x86_64]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,6 +25,7 @@ jobs:
       - name: Build macOS installer
         env:
           PYTHON_BIN: python3
+          TARGET_ARCH: ${{ matrix.target_arch }}
         run: |
           chmod +x build_macos_installer.sh
           ./build_macos_installer.sh
@@ -28,9 +33,9 @@ jobs:
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macos-installer
+          name: macos-installer-${{ matrix.target_arch }}
           path: |
-            dist/*.dmg
+            dist/*${{ matrix.target_arch }}*.dmg
             dist/*.app
 
   build-windows:
@@ -48,9 +53,11 @@ jobs:
         run: choco install innosetup --no-progress -y
 
       - name: Build Windows installer
-        shell: powershell
+        shell: pwsh
         run: |
-          powershell -ExecutionPolicy Bypass -File .\build_windows_installer.ps1 -PythonBin "python"
+          Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
+          Get-Content .\build_windows_installer.ps1 | Select-Object -First 80
+          .\build_windows_installer.ps1 -PythonBin "python"
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
