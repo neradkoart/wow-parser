@@ -1,0 +1,50 @@
+# OS / Editor
+.DS_Store
+.idea/
+.vscode/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+.venv-build/
+.venv-build-win/
+venv/
+
+# Build artifacts
+build/
+dist/
+*.spec
+*.dmg
+*.exe
+
+# Runtime / parser outputs
+report.html
+report.json
+test_report.html
+test_report.json
+splitter_report.json
+result.json
+*_result.json
+*_index.html
+index.html
+
+# Input/output working files
+urls.txt
+dzen.txt
+shorts.txt
+tiktok.txt
+vk_clips.txt
+vk_wall.txt
+unknown_urls.txt
+
+# Secrets / local config
+vk_token.txt
+wowData.txt
+*.log
