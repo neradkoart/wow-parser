@@ -147,10 +147,10 @@ def run_inprocess_task(name, module, argv, progress_callback=None, extra_env=Non
 def build_module_cmd(python_cmd, module_name):
     frozen_mode = bool(getattr(sys, "frozen", False))
     if frozen_mode:
-        # Spawn same bundled executable; app_ui.py will execute task mode from env.
+        # Spawn same bundled executable; app_ui entrypoint will execute task mode from env.
         return [python_cmd], {"WOW_TASK_MODULE": module_name}
-    # Non-frozen: run app_ui.py as launcher in task mode.
-    return [python_cmd, "-u", str(SOURCE_DIR / "app_ui.py")], {"WOW_TASK_MODULE": module_name}
+    # Non-frozen: run entrypoint launcher in task mode.
+    return [python_cmd, "-u", str(SOURCE_DIR / "entrypoints" / "app_ui.py")], {"WOW_TASK_MODULE": module_name}
 
 
 def read_json(path):
