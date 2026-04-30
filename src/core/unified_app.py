@@ -1,14 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from src.core.unified_app import main, parse_args, run_pipeline
-
-
-if __name__ == "__main__":
-    main()
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import argparse
 import json
 import os
@@ -20,16 +12,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import shutil
 
-import dzen_parser_grouped
-import parse_vk
-import pinterest_parser_grouped
-import tiktok_parser_grouped
-import youtube_shorts_parser_grouped
-import urls_splitter
-import wow_urls_fetcher
+from src.core import urls_splitter, wow_urls_fetcher
+from src.parsers import (
+    dzen_parser_grouped,
+    parse_vk,
+    pinterest_parser_grouped,
+    tiktok_parser_grouped,
+    youtube_shorts_parser_grouped,
+)
 
 
-SOURCE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SOURCE_DIR = PROJECT_ROOT
 
 
 def get_work_dir():

@@ -12,6 +12,7 @@ if [[ "${TARGET_ARCH}" == "native" ]]; then
   ARCH_SUFFIX="$(uname -m)"
 fi
 DMG_NAME="wow-parser-macos-installer-${ARCH_SUFFIX}-v${APP_VERSION}.dmg"
+DMG_PATH="dist/${DMG_NAME}"
 
 echo "[1/6] Создание virtualenv: ${VENV_DIR}"
 "${PYTHON_BIN}" -m venv "${VENV_DIR}"
@@ -36,9 +37,8 @@ cp -R "${APP_BUNDLE}" dist/dmg/
 ln -s /Applications dist/dmg/Applications
 
 echo "[5/6] Сборка DMG"
-hdiutil create -volname "${APP_NAME}" -srcfolder dist/dmg -ov -format UDZO "dist/${DMG_NAME}"
+hdiutil create -volname "${APP_NAME}" -srcfolder dist/dmg -ov -format UDZO "${DMG_PATH}"
 
 echo "[6/6] Готово"
 echo "Приложение: ${APP_BUNDLE}"
-echo "Установщик: dist/${DMG_NAME}"
-echo "Для Gatekeeper/нотаризации нужен отдельный шаг codesign + notarytool."
+echo "Установщик: ${DMG_PATH}"

@@ -1,18 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from src.ui.app_ui import main, run_task_mode_if_requested
-
-
-if __name__ == "__main__":
-    import sys
-
-    if run_task_mode_if_requested():
-        sys.exit(0)
-    main()
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import html
 import io
 import json
@@ -28,14 +16,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs
 
-import unified_app
-import parse_vk
-import pinterest_parser_grouped
-import tiktok_parser_grouped
-import youtube_shorts_parser_grouped
-import dzen_parser_grouped
-import wow_urls_fetcher
-import urls_splitter
+from src.core import unified_app, urls_splitter, wow_urls_fetcher
+from src.parsers import (
+    dzen_parser_grouped,
+    parse_vk,
+    pinterest_parser_grouped,
+    tiktok_parser_grouped,
+    youtube_shorts_parser_grouped,
+)
 
 
 HOST = "127.0.0.1"
@@ -61,7 +49,8 @@ JOB = {
 SERVER_REF = {"server": None}
 APP_LOG_PATH = Path.home() / "Library" / "Logs" / "WowParser" / "app.log"
 APP_DATA_DIR = Path.home() / "Library" / "Application Support" / "WowParser"
-FAVICON_PATH = Path(__file__).resolve().parent / "favicon.png"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+FAVICON_PATH = PROJECT_ROOT / "favicon.png"
 
 
 def setup_file_logging():
