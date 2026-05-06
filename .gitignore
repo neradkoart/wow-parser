@@ -46,5 +46,7 @@ unknown_urls.txt
 
 # Secrets / local config
 vk_token.txt
+pinterest_token.txt
+ok_token.txt
 wowData.txt
 *.log

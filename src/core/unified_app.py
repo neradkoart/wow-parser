@@ -12,9 +12,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import shutil
 
-from src.core import urls_splitter, wow_urls_fetcher
+from src.core import urls_splitter, wow_urls_fetcher, wow_weekly_report
 from src.parsers import (
     dzen_parser_grouped,
+    parse_ok,
     parse_vk,
     pinterest_parser_grouped,
     tiktok_parser_grouped,
@@ -188,6 +189,7 @@ def render_report(items, output_path):
         "dzen": {"title": "Dzen", "file": "dzen_index.html", "videos": 0, "views": 0, "authors": set()},
         "tiktok": {"title": "TikTok", "file": "tiktok_index.html", "videos": 0, "views": 0, "authors": set()},
         "pinterest": {"title": "Pinterest", "file": "pinterest_index.html", "videos": 0, "views": 0, "authors": set()},
+        "ok": {"title": "Одноклассники", "file": "ok_index.html", "videos": 0, "views": 0, "authors": set()},
     }
     for item in items:
         p = item.get("platform")
@@ -200,7 +202,7 @@ def render_report(items, output_path):
 
     cards = []
     nav_buttons = []
-    for key in ("vk", "youtube", "dzen", "tiktok", "pinterest"):
+    for key in ("vk", "youtube", "dzen", "tiktok", "pinterest", "ok"):
         stat = by_platform[key]
         cards.append(
             f"""
@@ -289,7 +291,7 @@ iframe {{
 <div class="container">
   <div class="hero">
     <h1>Единый кабинет аналитики соцсетей</h1>
-    <p>Современная витрина отчетов по платформам с быстрым переключением между VK, YouTube, Dzen, TikTok и Pinterest.</p>
+    <p>Современная витрина отчетов по платформам с быстрым переключением между VK, YouTube, Dzen, TikTok, Pinterest и Одноклассниками.</p>
     <p style="margin-top:10px;"><a href="{restart_url}" style="display:inline-block;padding:9px 12px;border-radius:10px;border:1px solid #d8b4fe;background:#fff;color:#581c87;font-weight:600;text-decoration:none;">Парсить заново</a></p>
     <div class="summary">
       <div class="box"><b>Всего видео:</b> {len(items)}</div>
@@ -326,6 +328,7 @@ def parse_args():
     parser.add_argument("--skip-youtube", action="store_true")
     parser.add_argument("--skip-dzen", action="store_true")
     parser.add_argument("--skip-pinterest", action="store_true")
+    parser.add_argument("--skip-ok", action="store_true", help="Пропустить Одноклассники (ok.ru)")
     parser.add_argument("--report-html", default="report.html")
     parser.add_argument("--report-json", default="report.json")
     return parser.parse_args()
@@ -434,6 +437,23 @@ def run_pipeline(args, progress_callback=None):
         else:
             set_progress("pinterest", 100)
 
+        ok_cookie = (work_dir / "ok_token.txt").read_text(encoding="utf-8").strip() if (work_dir / "ok_token.txt").exists() else ""
+        ok_input = work_dir / "ok.txt"
+        ok_has_urls = ok_input.exists() and bool(ok_input.read_text(encoding="utf-8").strip())
+        if not args.skip_ok and ok_has_urls:
+            cmd, cmd_env = build_module_cmd(python_cmd, "parse_ok")
+            tasks.append(
+                (
+                    "ok",
+                    ["parse_ok.py", "--input", "ok.txt", "--output", "ok_index.html", "--save-json", "ok_result.json", "--verbose"],
+                    cmd,
+                    {**cmd_env, "PYTHONPATH": merged_py_path, **({"OK_COOKIE": ok_cookie} if ok_cookie else {})},
+                    1200,
+                )
+            )
+        else:
+            set_progress("ok", 100)
+
         errors = []
         done_count = 0
         total_count = len(tasks) if tasks else 1
@@ -474,6 +494,9 @@ def run_pipeline(args, progress_callback=None):
         if not args.skip_pinterest and (work_dir / "pinterest_result.json").exists():
             for item in read_json(work_dir / "pinterest_result.json"):
                 unified.append(normalize_item("pinterest", item))
+        if not args.skip_ok and (work_dir / "ok_result.json").exists():
+            for item in read_json(work_dir / "ok_result.json"):
+                unified.append(normalize_item("ok", item))
 
         if not args.skip_vk:
             vk_html = work_dir / "index.html"
@@ -483,6 +506,12 @@ def run_pipeline(args, progress_callback=None):
         (work_dir / args.report_json).write_text(json.dumps(unified, ensure_ascii=False, indent=2), encoding="utf-8")
         report_path = work_dir / args.report_html
         render_report(unified, report_path)
+        set_progress("global", 97)
+        if (work_dir / "wow_campaign_context.json").exists() and (work_dir / "wow_slots_meta.json").exists():
+            try:
+                wow_weekly_report.generate_weekly_report(work_dir)
+            except Exception as exc:
+                print(f"WARN: недельный отчёт WOW: {exc}")
         set_progress("global", 100)
 
         print(f"Готово: {args.report_json}, {args.report_html}")

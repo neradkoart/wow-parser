@@ -14,11 +14,12 @@ import webbrowser
 from contextlib import redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from src.core import unified_app, urls_splitter, wow_urls_fetcher
 from src.parsers import (
     dzen_parser_grouped,
+    parse_ok,
     parse_vk,
     pinterest_parser_grouped,
     tiktok_parser_grouped,
@@ -43,6 +44,7 @@ JOB = {
         "youtube": 0,
         "dzen": 0,
         "pinterest": 0,
+        "ok": 0,
     },
     "task_errors": {},
 }
@@ -78,6 +80,7 @@ def run_task_mode_if_requested():
         "youtube_shorts_parser_grouped": youtube_shorts_parser_grouped,
         "dzen_parser_grouped": dzen_parser_grouped,
         "pinterest_parser_grouped": pinterest_parser_grouped,
+        "parse_ok": parse_ok,
         "wow_urls_fetcher": wow_urls_fetcher,
         "urls_splitter": urls_splitter,
     }
@@ -196,6 +199,10 @@ button:hover { background: #faf5ff; }
     <textarea name="pinterest_token"></textarea>
   </div>
   <div class="card">
+    <label>OK.ru cookie (опционально; для закрытых видео вставь Cookie из браузера):</label><br>
+    <textarea name="ok_token" placeholder="session_key=...; statuid=..."></textarea>
+  </div>
+  <div class="card">
     <label>URLs (по одной ссылке в строке):</label><br>
     <textarea name="urls" id="urlsField"></textarea>
     <div id="dupBox" class="dup-box">
@@ -205,7 +212,20 @@ button:hover { background: #faf5ff; }
   </div>
   <div class="card">
     <label>wowData (key=value):</label><br>
-    <textarea name="wow_data"></textarea>
+    <textarea name="wow_data">campaign_id=27761
+bearerToken=...
+date_from=2026-04-16
+date_to=2026-05-15
+# bloggers: список id или all / пусто = все блогеры из API
+bloggers=all
+skip_weeks=1,3
+weekly_report=1</textarea>
+  </div>
+  <div class="card">
+    <label>Недельный отчёт: пропустить недели (1–5, через запятую), опционально:</label><br>
+    <input type="text" name="skip_campaign_weeks" style="width:100%;max-width:480px" placeholder="например: 1,3"/>
+    <br><br>
+    <label><input type="checkbox" name="wow_weekly_report"> Добавить weekly_report=1 в wowData (включает запись контекста для отчёта)</label>
   </div>
   <div class="card">
     <label><input type="checkbox" name="open_report" checked> Открывать report.html</label><br>
@@ -213,7 +233,8 @@ button:hover { background: #faf5ff; }
     <label><input type="checkbox" name="skip_tiktok"> Пропустить TikTok</label><br>
     <label><input type="checkbox" name="skip_youtube"> Пропустить YouTube</label><br>
     <label><input type="checkbox" name="skip_dzen"> Пропустить Dzen</label><br>
-    <label><input type="checkbox" name="skip_pinterest"> Пропустить Pinterest</label>
+    <label><input type="checkbox" name="skip_pinterest"> Пропустить Pinterest</label><br>
+    <label><input type="checkbox" name="skip_ok"> Пропустить Одноклассники (OK.ru)</label>
   </div>
   <button type="submit">Запустить парсинг</button>
   <button type="button" id="stopAppBtn" style="margin-left:8px;background:#fee2e2;border:1px solid #fecaca;">Остановить приложение</button>
@@ -226,6 +247,7 @@ button:hover { background: #faf5ff; }
   <div class="bar-wrap"><div class="row"><span>YouTube</span><span id="youtubeVal">0%</span></div><div class="bar"><div id="youtubeBar" class="bar-fill"></div></div></div>
   <div class="bar-wrap"><div class="row"><span>Dzen</span><span id="dzenVal">0%</span></div><div class="bar"><div id="dzenBar" class="bar-fill"></div></div></div>
   <div class="bar-wrap"><div class="row"><span>Pinterest</span><span id="pinterestVal">0%</span></div><div class="bar"><div id="pinterestBar" class="bar-fill"></div></div></div>
+  <div class="bar-wrap"><div class="row"><span>Одноклассники</span><span id="okVal">0%</span></div><div class="bar"><div id="okBar" class="bar-fill"></div></div></div>
   <div id="taskErrors" class="error-box">
     <h4>Ошибки парсинга</h4>
     <pre id="taskErrorsText"></pre>
@@ -255,35 +277,157 @@ function markBarError(id, hasError) {
   el.classList.toggle('error', !!hasError);
 }
 
-function normalizeUrlLine(value) {
-  return value.trim();
+function cleanUrlText(raw) {
+  let s = String(raw || '').trim();
+  s = s.replace(/^['"]+|['"]+$/g, '');
+  s = s.replace(/[.,);\\]}\\s]+$/g, '');
+  return s.trim();
+}
+
+function safeParseUrl(raw) {
+  const t = cleanUrlText(raw);
+  if (!t) return null;
+  try {
+    const withScheme = t.indexOf('://') !== -1 ? t : 'https://' + t;
+    return new URL(withScheme);
+  } catch (e) {
+    return null;
+  }
+}
+
+function extractVkClipRawId(u, fullStr) {
+  if (!u) return '';
+  const sp = u.searchParams;
+  const z = sp.get('z') || '';
+  if (z) {
+    const m1 = z.match(/^clip(-?\\d+_\\d+)$/i);
+    if (m1) return m1[1];
+  }
+  const q = (u.search && u.search.startsWith('?')) ? u.search.slice(1) : u.search;
+  const mQ = (q || '').match(/(?:^|[&])z=clip(-?\\d+_\\d+)/);
+  if (mQ) return mQ[1];
+  const path = u.pathname || '';
+  const mP = path.match(/\\/clip(-?\\d+_\\d+)/);
+  if (mP) return mP[1];
+  const mF = (fullStr || '').match(/clip(-?\\d+_\\d+)/);
+  return mF ? mF[1] : '';
+}
+
+function extractVkWallRawId(u, fullStr) {
+  if (!u) return '';
+  const path = u.pathname || '';
+  const mP = path.match(/\\/wall(-?\\d+_\\d+)/);
+  if (mP) return mP[1];
+  const mF = (fullStr || '').match(/wall(-?\\d+_\\d+)/);
+  return mF ? mF[1] : '';
+}
+
+/**
+ * Канонизация для поиска дублей (как в src/core/urls_splitter.py normalize_url).
+ */
+function normalizeUrlForDedup(raw) {
+  const t = cleanUrlText(raw);
+  if (!t) return '';
+  const u = safeParseUrl(t);
+  if (!u) return t.toLowerCase();
+  const host = (u.hostname || '').toLowerCase().replace(/^www\\./, '');
+  const path = u.pathname || '';
+  const href = u.href;
+
+  if (['youtube.com', 'm.youtube.com', 'youtu.be'].includes(host)) {
+    if (host === 'youtu.be') {
+      const vid = path.replace(/^\\//, '').split('/')[0];
+      if (vid) return 'https://www.youtube.com/shorts/' + vid;
+    }
+    if (path.indexOf('/shorts/') !== -1) {
+      const rest = path.split('/shorts/')[1] || '';
+      const videoId = rest.split('/')[0];
+      if (videoId) return 'https://www.youtube.com/shorts/' + videoId;
+    }
+    if (path === '/watch' && u.searchParams.get('v')) {
+      return 'https://www.youtube.com/shorts/' + u.searchParams.get('v');
+    }
+  }
+
+  if (['tiktok.com', 'm.tiktok.com', 'vm.tiktok.com', 'vt.tiktok.com'].includes(host)) {
+    if (host === 'vm.tiktok.com' || host === 'vt.tiktok.com') {
+      return u.protocol + '//' + u.host + path;
+    }
+    const m = path.match(/^\\/@([^/]+)\\/video\\/(\\d+)/);
+    if (m) return 'https://www.tiktok.com/@' + m[1] + '/video/' + m[2];
+    return u.protocol + '//' + u.host + path;
+  }
+
+  if (['dzen.ru', 'm.dzen.ru', 'zen.yandex.ru', 'm.zen.yandex.ru'].includes(host)) {
+    const m = path.match(/\\/shorts\\/([^/?#]+)/);
+    if (m) return 'https://dzen.ru/shorts/' + m[1];
+    return u.protocol + '//' + u.host + path;
+  }
+
+  if (['pinterest.com', 'ru.pinterest.com', 'm.pinterest.com', 'pin.it'].includes(host)) {
+    if (host === 'pin.it') return u.protocol + '//' + u.host + path;
+    const m = path.match(/\\/pin\\/(\\d+)/);
+    if (m) return 'https://ru.pinterest.com/pin/' + m[1] + '/';
+    return u.protocol + '//' + u.host + path;
+  }
+
+  if (['vk.com', 'vk.ru', 'm.vk.com', 'm.vk.ru'].includes(host)) {
+    const clipId = extractVkClipRawId(u, href);
+    if (clipId) return 'https://vk.ru/clip' + clipId;
+    const wallId = extractVkWallRawId(u, href);
+    if (wallId) return 'https://vk.ru/wall' + wallId;
+  }
+
+  if (['ok.ru', 'm.ok.ru'].includes(host)) {
+    const m = path.match(/\\/video\\/(\\d+)/);
+    if (m) return 'https://ok.ru/video/' + m[1];
+    const clipId = u.searchParams.get('clip_id');
+    if (clipId && /^\\d+$/.test(clipId)) return 'https://ok.ru/video/' + clipId;
+    let op = path || '/';
+    if (op.length > 1 && op.endsWith('/')) op = op.slice(0, -1);
+    return 'https://ok.ru' + (op || '/');
+  }
+
+  let p = path || '/';
+  if (p.length > 1 && p.endsWith('/')) {
+    p = p.slice(0, -1);
+  }
+  return u.origin + p;
 }
 
 function updateDuplicateInfo() {
   const lines = (urlsField.value || '')
     .split('\\n')
-    .map(normalizeUrlLine)
+    .map(cleanUrlText)
     .filter(Boolean);
 
-  const counts = new Map();
+  /** normalized -> raw lines (в порядке ввода) */
+  const bucket = new Map();
   for (const line of lines) {
-    counts.set(line, (counts.get(line) || 0) + 1);
+    const key = normalizeUrlForDedup(line) || line.toLowerCase();
+    if (!bucket.has(key)) bucket.set(key, []);
+    bucket.get(key).push(line);
   }
 
-  const duplicates = [];
-  for (const [url, count] of counts.entries()) {
-    if (count > 1) duplicates.push({ url, count });
+  const dupGroups = [];
+  for (const [canon, raws] of bucket) {
+    if (raws.length > 1) dupGroups.push({ canon, raws });
   }
 
-  if (!duplicates.length) {
+  if (!dupGroups.length) {
     dupBox.style.display = 'none';
     dupList.textContent = '';
     return;
   }
 
-  duplicates.sort((a, b) => b.count - a.count);
-  dupTitle.textContent = `Найдены дубли: ${duplicates.length} ссылок`;
-  dupList.textContent = duplicates.map(d => `${d.count}x  ${d.url}`).join('\\n');
+  dupGroups.sort((a, b) => b.raws.length - a.raws.length);
+  dupTitle.textContent = `Найдены дубли: ${dupGroups.length} групп (с учётом нормализации ссылок)`;
+  dupList.textContent = dupGroups.map((g) => {
+    const uniq = [...new Set(g.raws)];
+    const head = g.raws.length + '×  ' + g.canon;
+    const linesOut = uniq.filter((r) => r !== g.canon).map((r) => '   — ' + r);
+    return linesOut.length ? head + '\\n' + linesOut.join('\\n') : head;
+  }).join('\\n\\n');
   dupBox.style.display = 'block';
 }
 
@@ -295,15 +439,17 @@ async function pollStatus() {
   const youtube = Number((s.progress || {}).youtube || 0);
   const dzen = Number((s.progress || {}).dzen || 0);
   const pinterest = Number((s.progress || {}).pinterest || 0);
+  const ok = Number((s.progress || {}).ok || 0);
 
   setBar('vk', vk);
   setBar('tiktok', tiktok);
   setBar('youtube', youtube);
   setBar('dzen', dzen);
   setBar('pinterest', pinterest);
+  setBar('ok', ok);
 
-  // Continuous overall progress from the 4 social workers.
-  const globalPercent = Math.round((vk + tiktok + youtube + dzen + pinterest) / 5);
+  // Continuous overall progress from the social parsers.
+  const globalPercent = Math.round((vk + tiktok + youtube + dzen + pinterest + ok) / 6);
   setBar('g', globalPercent);
   const errs = s.task_errors || {};
   markBarError('vk', !!errs.vk);
@@ -311,6 +457,7 @@ async function pollStatus() {
   markBarError('youtube', !!errs.youtube);
   markBarError('dzen', !!errs.dzen);
   markBarError('pinterest', !!errs.pinterest);
+  markBarError('ok', !!errs.ok);
   if (Object.keys(errs).length) {
     taskErrorsBox.style.display = 'block';
     taskErrorsText.textContent = Object.entries(errs).map(([k, v]) => `${k}: ${v}`).join('\\n\\n');
@@ -365,16 +512,32 @@ window.addEventListener('beforeunload', () => {
 </html>"""
 
 
+def compose_wow_data(form):
+    wow_data = (form.get("wow_data", [""])[0] or "").strip()
+    extras = []
+    sw = (form.get("skip_campaign_weeks", [""])[0] or "").strip()
+    if sw:
+        extras.append(f"skip_weeks={sw}")
+    if "wow_weekly_report" in form:
+        extras.append("weekly_report=1")
+    if not extras:
+        return wow_data
+    base = wow_data.rstrip()
+    return base + ("\n" if base else "") + "\n".join(extras) + "\n"
+
+
 def run_pipeline(form):
     mode = (form.get("mode", ["urls"])[0] or "urls").strip()
     vk_token = (form.get("vk_token", [""])[0] or "").strip()
     pinterest_token = (form.get("pinterest_token", [""])[0] or "").strip()
+    ok_token = (form.get("ok_token", [""])[0] or "").strip()
     urls = (form.get("urls", [""])[0] or "").strip()
-    wow_data = (form.get("wow_data", [""])[0] or "").strip()
+    wow_raw = (form.get("wow_data", [""])[0] or "").strip()
+    wow_data = compose_wow_data(form)
 
     if mode == "urls" and not urls:
         raise RuntimeError("В режиме URLs нужно заполнить поле URLs.")
-    if mode == "wow" and not wow_data:
+    if mode == "wow" and not wow_raw:
         raise RuntimeError("В режиме WOW API нужно заполнить поле wowData.")
 
     APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -382,10 +545,13 @@ def run_pipeline(form):
         (APP_DATA_DIR / "vk_token.txt").write_text(vk_token + "\n", encoding="utf-8")
     if pinterest_token:
         (APP_DATA_DIR / "pinterest_token.txt").write_text(pinterest_token + "\n", encoding="utf-8")
+    if ok_token:
+        (APP_DATA_DIR / "ok_token.txt").write_text(ok_token + "\n", encoding="utf-8")
     if urls:
         (APP_DATA_DIR / "urls.txt").write_text(urls + "\n", encoding="utf-8")
-    if wow_data:
-        (APP_DATA_DIR / "wowData.txt").write_text(wow_data + "\n", encoding="utf-8")
+    if wow_data.strip():
+        text = wow_data if wow_data.endswith("\n") else wow_data + "\n"
+        (APP_DATA_DIR / "wowData.txt").write_text(text, encoding="utf-8")
 
     argv = ["unified_app.py"]
     if mode == "wow":
@@ -402,6 +568,8 @@ def run_pipeline(form):
         argv.append("--skip-dzen")
     if "skip_pinterest" in form:
         argv.append("--skip-pinterest")
+    if "skip_ok" in form:
+        argv.append("--skip-ok")
 
     old_argv = sys.argv[:]
     buffer = io.StringIO()
@@ -415,6 +583,35 @@ def run_pipeline(form):
 
 
 class Handler(BaseHTTPRequestHandler):
+    def do_download(self):
+        parsed = urlparse(self.path)
+        q = parse_qs(parsed.query, keep_blank_values=True)
+        name = (q.get("name", [""])[0] or "").strip()
+        allowed = {
+            "report.html": ("text/html; charset=utf-8", APP_DATA_DIR / "report.html"),
+            "report.json": ("application/json; charset=utf-8", APP_DATA_DIR / "report.json"),
+            "campaign_weekly_report.html": ("text/html; charset=utf-8", APP_DATA_DIR / "campaign_weekly_report.html"),
+            "campaign_weekly_report.xlsx": (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                APP_DATA_DIR / "campaign_weekly_report.xlsx",
+            ),
+        }
+        item = allowed.get(name)
+        if not item:
+            self.send_error(404)
+            return
+        ctype, path = item
+        if not path.exists():
+            self.send_error(404)
+            return
+        body = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self):
         if self.path == "/shutdown":
             body = b"stopping"
@@ -469,22 +666,27 @@ class Handler(BaseHTTPRequestHandler):
                 mode = (form.get("mode", ["urls"])[0] or "urls").strip()
                 vk_token = (form.get("vk_token", [""])[0] or "").strip()
                 pinterest_token = (form.get("pinterest_token", [""])[0] or "").strip()
+                ok_token = (form.get("ok_token", [""])[0] or "").strip()
                 urls = (form.get("urls", [""])[0] or "").strip()
-                wow_data = (form.get("wow_data", [""])[0] or "").strip()
+                wow_raw = (form.get("wow_data", [""])[0] or "").strip()
+                wow_data = compose_wow_data(form)
 
                 if mode == "urls" and not urls:
                     raise RuntimeError("В режиме URLs нужно заполнить поле URLs.")
-                if mode == "wow" and not wow_data:
+                if mode == "wow" and not wow_raw:
                     raise RuntimeError("В режиме WOW API нужно заполнить поле wowData.")
 
                 if vk_token:
                     (APP_DATA_DIR / "vk_token.txt").write_text(vk_token + "\n", encoding="utf-8")
                 if pinterest_token:
                     (APP_DATA_DIR / "pinterest_token.txt").write_text(pinterest_token + "\n", encoding="utf-8")
+                if ok_token:
+                    (APP_DATA_DIR / "ok_token.txt").write_text(ok_token + "\n", encoding="utf-8")
                 if urls:
                     (APP_DATA_DIR / "urls.txt").write_text(urls + "\n", encoding="utf-8")
-                if wow_data:
-                    (APP_DATA_DIR / "wowData.txt").write_text(wow_data + "\n", encoding="utf-8")
+                if wow_data.strip():
+                    text = wow_data if wow_data.endswith("\n") else wow_data + "\n"
+                    (APP_DATA_DIR / "wowData.txt").write_text(text, encoding="utf-8")
 
                 argv = ["unified_app.py"]
                 if mode == "wow":
@@ -501,6 +703,8 @@ class Handler(BaseHTTPRequestHandler):
                     argv.append("--skip-dzen")
                 if "skip_pinterest" in form:
                     argv.append("--skip-pinterest")
+                if "skip_ok" in form:
+                    argv.append("--skip-ok")
 
                 sys.argv = argv
                 args = unified_app.parse_args()
@@ -561,10 +765,23 @@ class Handler(BaseHTTPRequestHandler):
             body = result_html.encode("utf-8")
             self.send_response(200)
         else:
+            links = []
+            if (APP_DATA_DIR / "report.html").exists():
+                links.append('<a href="/download?name=report.html">Скачать report.html</a>')
+            if (APP_DATA_DIR / "report.json").exists():
+                links.append('<a href="/download?name=report.json">Скачать report.json</a>')
+            if (APP_DATA_DIR / "campaign_weekly_report.html").exists():
+                links.append('<a href="/download?name=campaign_weekly_report.html">Скачать weekly HTML</a>')
+            if (APP_DATA_DIR / "campaign_weekly_report.xlsx").exists():
+                links.append(
+                    '<a href="/download?name=campaign_weekly_report.xlsx" style="display:inline-block;padding:10px 14px;border:1px solid #93c5fd;border-radius:10px;background:#eff6ff;color:#1d4ed8;text-decoration:none;font-weight:700;">Скачать Excel (календарь)</a>'
+                )
+            links_html = "<br>".join(links) if links else "Файлы отчёта не найдены."
             result_html = f"""<!doctype html><html lang="ru"><meta charset="utf-8"><title>Результат</title>
             <body style="font-family:Arial,sans-serif;margin:20px;background:#f4f7fb">
             <h2>Готово</h2>
-            <p>Сформированы файлы <code>report.html</code> и <code>report.json</code>.</p>
+            <p>Сформированы файлы отчёта. Скачивание:</p>
+            <p>{links_html}</p>
             <p><a href="/" style="display:inline-block;padding:8px 12px;border:1px solid #c7d2e0;border-radius:10px;background:#eef3f8;color:#1f2937;text-decoration:none;font-weight:600;">Парсить снова</a></p>
             <h3>Лог</h3><div class="log">{html.escape(JOB["log"])}</div></body></html>"""
             body = result_html.encode("utf-8")
@@ -575,6 +792,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/download":
+            self.do_download()
+            return
         if self.path == "/favicon.png":
             if not FAVICON_PATH.exists():
                 self.send_error(404)

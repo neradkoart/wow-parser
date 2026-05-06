@@ -36,6 +36,24 @@ def extract_vk_clip_raw_id(url):
     return ""
 
 
+def extract_ok_video_id(url):
+    """OK.ru: /video/<id> или /clip?clip_id=<id> (и варианты с query)."""
+    parsed = urlparse(url)
+    host = parsed.netloc.lower().replace("www.", "")
+    if host not in ("ok.ru", "m.ok.ru"):
+        return ""
+
+    match = re.search(r"/video/(\d+)", parsed.path)
+    if match:
+        return match.group(1)
+
+    match = re.search(r"(?:^|[?&])clip_id=(\d+)", parsed.query)
+    if match:
+        return match.group(1)
+
+    return ""
+
+
 def extract_vk_wall_raw_id(url):
     parsed = urlparse(url)
 
@@ -103,6 +121,17 @@ def normalize_url(url):
             return f"https://ru.pinterest.com/pin/{match.group(1)}/"
         return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
 
+    # OK.ru (Одноклассники): видео → https://ok.ru/video/<id>; иначе https://ok.ru<path> без query (группы/топики/посты)
+    if host in ("ok.ru", "m.ok.ru"):
+        vid = extract_ok_video_id(url)
+        if vid:
+            return f"https://ok.ru/video/{vid}"
+        path = parsed.path or "/"
+        if not path.startswith("/"):
+            path = "/" + path
+        p = path.rstrip("/") or "/"
+        return f"https://ok.ru{p}"
+
     # VK clips / wall
     if host in ("vk.com", "vk.ru", "m.vk.com", "m.vk.ru"):
         clip_raw_id = extract_vk_clip_raw_id(url)
@@ -132,6 +161,9 @@ def classify(url):
     if host in ("pinterest.com", "ru.pinterest.com", "m.pinterest.com") and "/pin/" in parsed.path:
         return "pinterest"
 
+    if host in ("ok.ru", "m.ok.ru"):
+        return "ok"
+
     if host in ("dzen.ru", "m.dzen.ru", "zen.yandex.ru", "m.zen.yandex.ru") and "/shorts/" in parsed.path:
         return "dzen"
 
@@ -160,7 +192,8 @@ def extract_urls(text):
         r"dzen\.ru|m\.dzen\.ru|zen\.yandex\.ru|m\.zen\.yandex\.ru|"
         r"youtube\.com|m\.youtube\.com|youtu\.be|"
         r"tiktok\.com|m\.tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com|"
-        r"pinterest\.com|ru\.pinterest\.com|pin\.it)/[^\s'\"<>]+)"
+        r"pinterest\.com|ru\.pinterest\.com|pin\.it|"
+        r"ok\.ru|m\.ok\.ru)/[^\s'\"<>]+)"
     )
 
     for match in re.finditer(bare_pattern, text):
@@ -368,6 +401,7 @@ def main():
     parser.add_argument("--youtube-output", default="shorts.txt")
     parser.add_argument("--tiktok-output", default="tiktok.txt")
     parser.add_argument("--pinterest-output", default="pinterest.txt")
+    parser.add_argument("--ok-output", default="ok.txt")
     parser.add_argument("--vk-output", default="vk_clips.txt")
     parser.add_argument("--vk-wall-output", default="vk_wall.txt")
     parser.add_argument("--unknown-output", default="unknown_urls.txt")
@@ -397,6 +431,7 @@ def main():
         "youtube": [],
         "tiktok": [],
         "pinterest": [],
+        "ok": [],
         "vk_clip": [],
         "vk_wall": [],
         "vk": [],
@@ -434,6 +469,7 @@ def main():
     write_lines(args.youtube_output, buckets["youtube"])
     write_lines(args.tiktok_output, buckets["tiktok"])
     write_lines(args.pinterest_output, buckets["pinterest"])
+    write_lines(args.ok_output, buckets["ok"])
     write_lines(args.vk_output, vk_clips)
     write_lines(args.vk_wall_output, unique_keep_order(unresolved_walls))
 
@@ -461,6 +497,7 @@ def main():
             "youtube": len(buckets["youtube"]),
             "tiktok": len(buckets["tiktok"]),
             "pinterest": len(buckets["pinterest"]),
+            "ok": len(buckets["ok"]),
             "vk_clip_direct": len(buckets["vk_clip"]),
             "vk_wall_detected": len(buckets["vk_wall"]),
             "vk_generic": len(buckets["vk"]),
@@ -476,6 +513,7 @@ def main():
             "youtube": buckets["youtube"],
             "tiktok": buckets["tiktok"],
             "pinterest": buckets["pinterest"],
+            "ok": buckets["ok"],
             "vk_clip_direct": buckets["vk_clip"],
             "vk_wall_detected": buckets["vk_wall"],
             "vk_generic": buckets["vk"],
@@ -492,6 +530,7 @@ def main():
     print(f"  shorts.txt: {len(buckets['youtube'])}")
     print(f"  tiktok.txt: {len(buckets['tiktok'])}")
     print(f"  pinterest.txt: {len(buckets['pinterest'])}")
+    print(f"  ok.txt: {len(buckets['ok'])}")
     print(f"  vk_clips.txt: {len(vk_clips)}")
     print(f"  vk_wall.txt: {len(unique_keep_order(unresolved_walls))}")
 

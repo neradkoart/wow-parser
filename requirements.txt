@@ -1,3 +1,5 @@
 requests
 playwright
 pyinstaller
+openpyxl
+beautifulsoup4
